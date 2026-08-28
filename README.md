@@ -1,6 +1,6 @@
 # Claude Code 全局配置（C# / .NET）
 
-优化后的全局 CLAUDE.md 配置包，适用于 C# / .NET 开发者。
+全局 CLAUDE.md 配置包，适用于 C# / .NET 开发者。
 
 ---
 
