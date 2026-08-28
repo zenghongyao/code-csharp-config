@@ -1,6 +1,6 @@
 # C# 代码注释详细规范
 
-本文件是全局 CLAUDE.md 第 3 节的扩展。引用方式：`@~/.claude/rules/csharp-comment-standards.md`
+本文件是全局 CLAUDE.md 第 4 节的扩展。引用方式：`@~/.claude/rules/csharp-comment-standards.md`
 
 ---
 
