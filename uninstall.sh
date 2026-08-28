@@ -72,13 +72,15 @@ remove_path() {
 }
 
 # 恢复最新备份：找到 <path>.bak.* 中时间戳最大的那个，重命名为 <path>
+# 返回 0 表示恢复了，1 表示没找到备份
 restore_latest_backup() {
     local target_path="$1"
     # 仅匹配直接子项的备份：CLAUDE.md.bak.*，不会误匹配 CLAUDE.md.bak.xxxx.bak.*（理论上不存在）
     local pattern="${target_path}.bak.*"
     # 按文件名排序（时间戳格式 yyyyMMddHHmmss，字符串排序即为时间顺序）
+    # -d 让 ls 只列参数本身，避免目录级备份被错误地"进入内部"
     local latest
-    latest=$(ls -1t $pattern 2>/dev/null | head -n 1 || true)
+    latest=$(ls -1dt $pattern 2>/dev/null | head -n 1 || true)
     if [[ -n "$latest" ]]; then
         log_info "恢复备份：$latest -> $target_path"
         # 若目标位置已存在（首次安装无备份的情况），先删再恢复
@@ -86,14 +88,17 @@ restore_latest_backup() {
             run_cmd rm -rf "$target_path"
         fi
         run_cmd mv "$latest" "$target_path"
+        return 0
     fi
+    return 1
 }
 
 # 删除所有 .bak.<时间戳> 备份（仅 --purge 模式调用）
 purge_all_backups() {
     local pattern="$1"
     local backups
-    backups=$(ls -1t $pattern 2>/dev/null || true)
+    # -d 让 ls 只列参数本身：对文件正确，对目录级备份也不会递归进去
+    backups=$(ls -1dt $pattern 2>/dev/null || true)
     if [[ -n "$backups" ]]; then
         echo "$backups" | while read -r b; do
             [[ -n "$b" ]] && log_info "清理备份：$b" && [[ "$DRY_RUN" == false ]] && rm -rf "$b"
@@ -118,6 +123,7 @@ main() {
         remove_path "$TARGET_DIR/CLAUDE.md"
         remove_path "$TARGET_DIR/rules"
         purge_all_backups "$TARGET_DIR/CLAUDE.md.bak.*"
+        purge_all_backups "$TARGET_DIR/rules.bak.*"
         # rules 目录下是递归备份，统一清理
         if [[ -d "$TARGET_DIR/rules" ]]; then
             find "$TARGET_DIR/rules" -name '*.bak.*' -exec rm -rf {} +
@@ -127,13 +133,17 @@ main() {
             remove_path "$TARGET_DIR"
         fi
     else
-        # 默认：尝试从最新备份恢复，再删除本次安装的内容
-        restore_latest_backup "$TARGET_DIR/CLAUDE.md"
-        # rules 是目录，备份名形如 rules.bak.<时间戳>
+        # 默认：尝试从最新备份恢复；无备份时（首次安装）直接删除本次内容
+        if ! restore_latest_backup "$TARGET_DIR/CLAUDE.md"; then
+            remove_path "$TARGET_DIR/CLAUDE.md"
+        fi
+
+        # rules 是目录：先恢复目录级备份（如果有），恢复失败则删除目录（首次安装）
         if [[ -d "$TARGET_DIR/rules" ]]; then
-            # 先恢复目录级备份（如果存在）
-            restore_latest_backup "$TARGET_DIR/rules"
-            # 然后清理 rules 内部各文件的 .bak.*（install 脚本对每个规则文件都会备份）
+            if ! restore_latest_backup "$TARGET_DIR/rules"; then
+                remove_path "$TARGET_DIR/rules"
+            fi
+            # 清理 rules 内部各文件的 .bak.*（install 脚本对每个规则文件都会备份）
             local inner_backups
             inner_backups=$(find "$TARGET_DIR/rules" -name '*.bak.*' 2>/dev/null || true)
             if [[ -n "$inner_backups" ]]; then
@@ -142,10 +152,6 @@ main() {
                 done
             fi
         fi
-
-        # 若本次没有备份可恢复（首次安装），直接删除当前文件
-        remove_path "$TARGET_DIR/CLAUDE.md"
-        remove_path "$TARGET_DIR/rules"
 
         # 顺带清理目录级的 .bak.*（如果 install 备份过 rules 目录）
         purge_all_backups "$TARGET_DIR/rules.bak.*"
@@ -161,6 +167,12 @@ main() {
     log_info "卸载完成"
     if [[ "$DRY_RUN" == true ]]; then
         log_warn "本次为干跑模式，未实际修改任何文件"
+    fi
+
+    # 阻塞等待回车：仅在交互式终端且非干跑模式时
+    if [[ "$DRY_RUN" == false ]] && [[ -t 0 ]]; then
+        echo
+        read -r -p "按回车键关闭窗口..." _ || true
     fi
 }
 

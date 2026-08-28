@@ -36,28 +36,35 @@ function Show-Help {
 }
 
 # 备份已存在的文件/目录，保留最近 N 个同名备份
+# 只对"文件"或"非空目录"备份：避免 Install-Dir 创建的空目录占位被误备份
 function Backup-IfExists {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param($Path)
-    if (Test-Path $Path) {
-        $bak = "$Path.bak.$Timestamp"
-        Write-Warn2 "已存在：$Path（备份为 $(Split-Path -Leaf $bak)）"
-        if ($PSCmdlet.ShouldProcess($Path, "备份到 $bak")) {
-            Move-Item -Path $Path -Destination $bak -Force
-            # 清理超出数量限制的旧备份
-            $pattern = "$Path.bak.*"
-            $oldBackups = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending |
-                Select-Object -Skip $MaxBackups
-            foreach ($old in $oldBackups) {
-                Remove-Item -Path $old.FullName -Force
-                Write-Info "清理旧备份：$($old.Name)"
-            }
+    if (-not (Test-Path $Path)) { return }
+    if (Test-Path -PathType Container $Path) {
+        # 是目录：必须非空才备份
+        $items = @(Get-ChildItem -Path $Path -Force -ErrorAction SilentlyContinue)
+        if ($items.Count -eq 0) { return }
+    }
+    $bak = "$Path.bak.$Timestamp"
+    Write-Warn2 "已存在：$Path（备份为 $(Split-Path -Leaf $bak)）"
+    if ($PSCmdlet.ShouldProcess($Path, "备份到 $bak")) {
+        Move-Item -Path $Path -Destination $bak -Force
+        # 清理超出数量限制的旧备份
+        $pattern = "$Path.bak.*"
+        $oldBackups = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -Skip $MaxBackups
+        foreach ($old in $oldBackups) {
+            Remove-Item -Path $old.FullName -Force
+            Write-Info "清理旧备份：$($old.Name)"
         }
     }
 }
 
 # 复制单个文件（先备份再覆盖）
 function Install-File {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([string]$Src, [string]$Dst)
     if (-not (Test-Path $Src)) {
         Write-Err2 "源文件不存在：$Src"
@@ -76,6 +83,7 @@ function Install-File {
 
 # 复制整个目录（先备份再覆盖）
 function Install-Dir {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([string]$Src, [string]$Dst)
     if (-not (Test-Path $Src)) {
         Write-Err2 "源目录不存在：$Src"
@@ -132,4 +140,15 @@ Write-Host "     如果 Claude 能答出「禁止版本号、装饰符号、元�
 Write-Host
 if ($WhatIfPreference) {
     Write-Warn2 "本次为干跑模式（-WhatIf），未实际修改任何文件"
+}
+
+# 阻塞等待回车：仅在交互式终端且非 -WhatIf 时
+# 双击 .ps1 时让用户看到结果再关窗；管道/重定向/计划任务场景不阻塞
+if (-not $WhatIfPreference -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Write-Host
+    try {
+        [void][Console]::In.ReadLine()
+    } catch {
+        # Ctrl+C 等异常吞掉即可
+    }
 }

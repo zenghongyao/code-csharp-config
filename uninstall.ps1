@@ -37,6 +37,7 @@ function Show-Help {
 }
 
 function Remove-Path {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param($Path)
     if (Test-Path $Path) {
         Write-Info "删除：$Path"
@@ -47,10 +48,12 @@ function Remove-Path {
 }
 
 # 恢复最新备份：找到 <path>.bak.* 中时间戳最大的那个，重命名为 <path>
+# 返回 $true 表示恢复了，$false 表示没找到备份
 function Restore-LatestBackup {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param($TargetPath)
     $pattern = "$TargetPath.bak.*"
-    if (-not (Test-Path $pattern)) { return }
+    if (-not (Test-Path $pattern)) { return $false }
     $latest = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending |
         Select-Object -First 1
@@ -64,11 +67,14 @@ function Restore-LatestBackup {
         if ($PSCmdlet.ShouldProcess($latest.FullName, "重命名为 $TargetPath")) {
             Rename-Item -Path $latest.FullName -NewName (Split-Path -Leaf $TargetPath) -Force
         }
+        return $true
     }
+    return $false
 }
 
 # 删除所有 .bak.<时间戳> 备份（仅 -Purge 模式调用）
-function Purge-AllBackups {
+function Remove-AllBackups {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param($Pattern)
     if (Test-Path $Pattern) {
         Get-ChildItem -Path $Pattern -ErrorAction SilentlyContinue | ForEach-Object {
@@ -96,7 +102,8 @@ if ($Purge) {
     # 完全删除：清掉当前文件 + 所有备份
     Remove-Path "$TargetDir\CLAUDE.md"
     Remove-Path "$TargetDir\rules"
-    Purge-AllBackups "$TargetDir\CLAUDE.md.bak.*"
+    Remove-AllBackups "$TargetDir\CLAUDE.md.bak.*"
+    Remove-AllBackups "$TargetDir\rules.bak.*"
     # rules 目录下递归清理
     if (Test-Path "$TargetDir\rules") {
         Get-ChildItem -Path "$TargetDir\rules" -Filter '*.bak.*' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
@@ -111,13 +118,17 @@ if ($Purge) {
     }
 }
 else {
-    # 默认：尝试从最新备份恢复，再删除本次安装的内容
-    Restore-LatestBackup "$TargetDir\CLAUDE.md"
+    # 默认：尝试从最新备份恢复；无备份时（首次安装）直接删除本次内容
+    if (-not (Restore-LatestBackup "$TargetDir\CLAUDE.md")) {
+        Remove-Path "$TargetDir\CLAUDE.md"
+    }
 
-    # rules 是目录，先恢复目录级备份（如果存在）
+    # rules 是目录：恢复失败则删除目录（首次安装），恢复成功则保留
     if (Test-Path "$TargetDir\rules") {
-        Restore-LatestBackup "$TargetDir\rules"
-        # 然后清理 rules 内部各文件的 .bak.*
+        if (-not (Restore-LatestBackup "$TargetDir\rules")) {
+            Remove-Path "$TargetDir\rules"
+        }
+        # 清理 rules 内部各文件的 .bak.*
         Get-ChildItem -Path "$TargetDir\rules" -Filter '*.bak.*' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Info "清理文件级备份：$($_.FullName)"
             if ($PSCmdlet.ShouldProcess($_.FullName, "删除")) {
@@ -126,13 +137,9 @@ else {
         }
     }
 
-    # 若本次没有备份可恢复（首次安装），直接删除当前文件
-    Remove-Path "$TargetDir\CLAUDE.md"
-    Remove-Path "$TargetDir\rules"
-
     # 顺带清理目录级的 .bak.*
-    Purge-AllBackups "$TargetDir\rules.bak.*"
-    Purge-AllBackups "$TargetDir\CLAUDE.md.bak.*"
+    Remove-AllBackups "$TargetDir\rules.bak.*"
+    Remove-AllBackups "$TargetDir\CLAUDE.md.bak.*"
 
     # 若整个 .claude 目录为空，可顺手删除
     if ((Get-ChildItem -Path $TargetDir -Force -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) {
@@ -144,4 +151,14 @@ Write-Host
 Write-Info "卸载完成"
 if ($WhatIfPreference) {
     Write-Warn2 "本次为干跑模式（-WhatIf），未实际修改任何文件"
+}
+
+# 阻塞等待回车：仅在交互式终端且非 -WhatIf 时
+if (-not $WhatIfPreference -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Write-Host
+    try {
+        [void][Console]::In.ReadLine()
+    } catch {
+        # Ctrl+C 等异常吞掉即可
+    }
 }

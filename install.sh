@@ -147,6 +147,13 @@ main() {
     if [[ "$DRY_RUN" == true ]]; then
         log_warn "本次为干跑模式，未实际修改任何文件"
     fi
+
+    # 阻塞等待回车：仅在交互式终端且非干跑模式时
+    # 双击 .sh 时让用户看到结果再关窗；管道/重定向场景不阻塞
+    if [[ "$DRY_RUN" == false ]] && [[ -t 0 ]]; then
+        echo
+        read -r -p "按回车键关闭窗口..." _ || true
+    fi
 }
 
 main

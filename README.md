@@ -9,9 +9,11 @@
 ```text
 claude-global-config/
 ├── CLAUDE.md                          # 主文件（~120 行，核心规则）
-├── install.ps1                        # Windows 安装脚本
+├── install.bat                        # Windows 安装启动器（双击即用）
+├── install.ps1                        # Windows 安装脚本（命令行调用）
 ├── install.sh                         # macOS / Linux 安装脚本
-├── uninstall.ps1                      # Windows 卸载脚本
+├── uninstall.bat                      # Windows 卸载启动器（双击即用）
+├── uninstall.ps1                      # Windows 卸载脚本（命令行调用）
 ├── uninstall.sh                       # macOS / Linux 卸载脚本
 ├── rules/
 │   ├── csharp-comment-standards.md    # C# 注释详细规范（主文件第 4 节扩展）
@@ -27,16 +29,26 @@ claude-global-config/
 
 脚本会自动定位源目录（脚本所在目录）、创建目标目录、对已存在的旧文件**自动备份**为 `*.bak.<时间戳>`，并保留最近 3 个备份。
 
-### Windows（PowerShell）
+### Windows
+
+**推荐：双击 `install.bat`**
+
+直接在资源管理器里双击 `install.bat` 即可。它会：
+
+- 用 `-ExecutionPolicy Bypass` 绕过 PowerShell 执行策略（不需要先 `Set-ExecutionPolicy`）
+- 自动定位脚本所在目录，不依赖当前工作目录
+- 末尾 `pause` 留窗，让你看清输出结果再关
+
+命令行附加参数同理：`install.bat -WhatIf` 预览，`install.bat -Purge` 配套卸载。
+
+**备选：直接调 `install.ps1`**
+
+适合已设过 `Set-ExecutionPolicy RemoteSigned` 的用户：
 
 ```powershell
-# 首次使用需允许本地脚本执行（如已设置可跳过）
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-
 # 进入解压后的目录
 cd claude-global-config
 
-# 安装（先看预览再加 -WhatIf 去掉即可实际执行）
 .\install.ps1 -WhatIf    # 预览
 .\install.ps1            # 实际安装
 ```
@@ -85,6 +97,10 @@ mkdir -p ~/.claude && cp -r claude-global-config/CLAUDE.md claude-global-config/
 脚本默认从最近一次备份**回滚**到上次安装前的状态；如果没有备份（即首次安装），则直接删除当前文件。
 
 ### Windows 卸载
+
+**推荐：双击 `uninstall.bat`**（用法与安装一致，`uninstall.bat -Purge` 完全清除）。
+
+**备选：直接调 `uninstall.ps1`**
 
 ```powershell
 .\uninstall.ps1 -WhatIf    # 预览
