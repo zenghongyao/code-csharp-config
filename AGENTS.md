@@ -1,6 +1,6 @@
 # C# / .NET 全局开发规范
 
-适用于所有项目。项目级 CLAUDE.md 可以补充或覆盖通用约定；安全要求始终保留。
+适用于所有项目。项目级 AGENTS.md 可以补充或覆盖通用约定；安全要求始终保留。
 
 ## 个人偏好
 
@@ -37,8 +37,8 @@
 
 ## 注释与提交
 
-- 编写或修改 C# 注释前，读取 ~/.claude/rules/csharp-comment-standards.md。
-- 准备 Git 提交信息前，读取 ~/.claude/rules/git-commit-standards.md。
+- 编写或修改 C# 注释前，读取 ~/.codex/rules/csharp-comment-standards.md。
+- 准备 Git 提交信息前，读取 ~/.codex/rules/git-commit-standards.md。
 - 注释和提交信息不包含版本号、装饰符号、提交元信息或 AI 协作痕迹。
 - 代码注释文本末尾不添加中文或英文标点、分隔符或装饰字符；XML 标签和代码语法除外。
 

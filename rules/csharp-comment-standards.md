@@ -1,72 +1,50 @@
 # C# 代码注释详细规范
 
-本文件是全局 CLAUDE.md 第 4 节的扩展。引用方式：`@~/.claude/rules/csharp-comment-standards.md`
+本文件是 Claude 与 Codex 共享的 C# 注释规范。由各自的全局入口文件在编写或修改注释时按需读取。
 
----
+## 禁止内容
 
-## 1. 禁止内容清单
+### 版本号与方案标识
 
-### 1.1 版本号 / 方案标识
+- 不在注释中写 v9.x、V1.0 等版本号或补丁号。
+- 不写方案A、方案B、方案C 等方案标识。
+- 不写修订、新增、修改、撤销等带版本前后缀的措辞。
 
-- ❌ `v9.x`（如 `v9.4`、`v9.5`、`v9.5.1`）
-- ❌ `V1.0`、`V2.0` 等任何 `V` + 数字 + 小数点格式
-- ❌ `方案A`、`方案B`、`方案C` 等方案标识
-- ❌ `v9.1`、`v9.2`、`v9.3` 等具体补丁号单独出现在注释中
-- ❌ 中文"修订"、"新增"、"修改"、"撤销"等带版本前后缀的措辞
-  - 反例：`v9.4 新增：xxx`、`v9.5 修订：xxx`、`v9.5.1 修订：xxx`
+### 装饰符号
 
-### 1.2 特殊符号（注释中）
+- 不使用 ★、▶、◀、◆、●、■、✓、✗、✔、✘ 等装饰性符号。
+- 业务或技术说明可以表达方向，但不以 →、←、↑、↓ 作为注释开头标记。
+- 不使用 >>>>>、=====、----- 等分隔符。
 
-- ❌ `★`（黑色五角星）
-- ❌ `▶◀◆●■` 等装饰性符号
-- ❌ `✓`、`✗`、`✔`、`✘` 等勾叉符号
-- ❌ `→`、`←`、`↑`、`↓`（业务/技术说明中可使用，但不应作为注释开头标记）
-- ❌ `>>>>>`、`=====`、`-----` 等分隔符
+### 注释末尾
 
-### 1.3 元信息
+- 每条注释文本的末尾不添加句号、逗号、分号、冒号、感叹号、问号、省略号、顿号及其他中文或英文标点。
+- 末尾不添加装饰符号、分隔符或表情符号。
+- XML 文档注释中的 summary、param、returns、remarks 等文本末尾同样不添加句号、逗号、分号、冒号、感叹号、问号、省略号、顿号及其他中文或英文标点、装饰符或表情。
+- XML 文档注释中的标签和代码语法本身不受此限制，例如 </summary>。
 
-- ❌ 提交 hash（git commit id）
-- ❌ 完整 branch 名（如 `hyz_feat_迁移优化`）
-- ❌ PR 编号、issue 编号
-- ❌ 时间戳（如 `2026-08-18`）
-- ❌ 作者姓名
+### 元信息
 
----
+- 不写提交 hash、完整 branch 名、PR 或 issue 编号、时间戳和作者姓名。
 
-## 2. 正确示例 ✅
+## 允许内容
 
-```csharp
+- XML 文档注释，例如 summary、param、returns、remarks。
+- 解释业务原因、约束条件和已知陷阱。
+- 必要的技术兼容性说明，例如 C# 7.3 兼容时避免 switch expression。
+
+## 示例
+
+~~~csharp
 /// <summary>
 /// 频率模式枚举
 /// </summary>
 public enum FrequencyMode { ... }
 
 /// <summary>
-/// 判断指定 TransferType 是否启用（用于异常检测按需加载）
+/// 判断指定 TransferType 是否启用，用于异常检测按需加载
 /// </summary>
 private static bool IsTransferTypeEnabled(...) { ... }
+~~~
 
-// 允许：C# 语言版本说明（技术注释）
-// C# 7.3 兼容：避免 switch expression，改用 if-else
-public FrequencyMode GetFrequencyModeForSubModule(string name)
-{
-    if (name == "WaterCommon") return MediumFrequency;
-    if (name == "SensorCommon") return HighFrequency;
-    // ...
-}
-```
-
----
-
-## 3. 错误示例 ❌
-
-```csharp
-/// <summary>
-/// 频率模式枚举（v9.4 新增）
-/// </summary>
-
-// v9.4 校验：WatermeterID 子模块必须显式指定 FrequencyMode
-
-// ★ 异常检测服务注册（3 个子模块）
-RegisterService(...);
-```
+不要把版本记录、方案名称或装饰性标记写进以上注释。
