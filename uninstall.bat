@@ -1,17 +1,13 @@
 @echo off
-rem One-click uninstall Claude Code global config (Windows)
-rem Usage: double-click uninstall.bat, or pass args like -Purge
-rem Optional env var: CLAUDE_HOME (override default %USERPROFILE%, mirrors install.bat)
-rem Design: -ExecutionPolicy Bypass to skip policy prompt, pause to keep window open
+rem Global agent rules uninstaller for Windows.
+rem Usage: double-click, or use -Target Claude, Codex, or All.
+rem Optional AGENT_CONFIG_HOME overrides the user directory for both targets.
 
 chcp 65001 >nul
-
 setlocal
 set "SCRIPT_DIR=%~dp0"
 
-if defined CLAUDE_HOME (
-    set "USERPROFILE=%CLAUDE_HOME%"
-)
+if defined AGENT_CONFIG_HOME set "USERPROFILE=%AGENT_CONFIG_HOME%"
 
 where pwsh >nul 2>&1
 if %ERRORLEVEL% equ 0 (
@@ -19,6 +15,8 @@ if %ERRORLEVEL% equ 0 (
 ) else (
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%uninstall.ps1" %*
 )
+set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
 pause
+exit /b %EXIT_CODE%

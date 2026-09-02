@@ -1,21 +1,12 @@
 #!/usr/bin/env bash
-# 一键卸载 Claude Code 全局配置（macOS / Linux）
-# 默认行为：从最近一次备份恢复（如果存在），并删除本次安装写入的文件
-# 用法：
-#   ./uninstall.sh                回滚到上次备份（无备份则删除）
-#   ./uninstall.sh --purge        完全删除所有相关文件（含所有备份）
-#   ./uninstall.sh --dry-run      预览操作，不实际执行
-#   ./uninstall.sh --help         查看帮助
+# Claude 与 Codex 全局规则卸载器（macOS / Linux）
 
 set -euo pipefail
 
-# 目标目录 = 用户家目录下的 .claude
-TARGET_DIR="${HOME}/.claude"
-TIMESTAMP="$(date +%Y%m%d%H%M%S)"
 DRY_RUN=false
 PURGE=false
+TARGET=""
 
-# 颜色（仅当输出到终端时启用）
 if [[ -t 1 ]]; then
     C_GREEN='\033[0;32m'
     C_YELLOW='\033[0;33m'
@@ -25,155 +16,192 @@ else
     C_GREEN=''; C_YELLOW=''; C_RED=''; C_RESET=''
 fi
 
-log_info()  { printf "${C_GREEN}[OK]${C_RESET} %s\n" "$1"; }
-log_warn()  { printf "${C_YELLOW}[WARN]${C_RESET} %s\n" "$1"; }
-log_error() { printf "${C_RED}[ERROR]${C_RESET} %s\n" "$1" >&2; }
+log_info() { printf '%b[OK]%b %s\n' "$C_GREEN" "$C_RESET" "$1"; }
+log_warn() { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
+log_error() { printf '%b[ERROR]%b %s\n' "$C_RED" "$C_RESET" "$1" >&2; }
 
 show_help() {
     cat <<EOF
-用法：./uninstall.sh [选项]
+用法：./uninstall.sh [--target claude|codex|all] [--purge] [--dry-run]
 
 选项：
-  --purge      完全删除所有相关文件，包括所有 .bak.<时间戳> 备份
-  --dry-run    预览将要执行的操作，不实际修改文件
-  -h, --help   显示本帮助
+  --target    卸载目标。未指定时在交互式终端中选择。
+  --purge     删除本包入口、rules 和对应备份，不恢复旧配置。
+  --dry-run   预览操作，不修改文件。
+  -h, --help  显示本帮助。
 
-默认行为：
-  - 找到最近一次备份，恢复到 \${HOME}/.claude/
-  - 如果无备份（首次安装），直接删除目标文件/目录
-  - 删除本次安装写入的内容：CLAUDE.md、rules/ 及其备份
+默认行为恢复最近备份；没有备份时只删除本包安装的入口与 rules。
+非交互环境必须指定 --target。
 EOF
 }
 
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run) DRY_RUN=true ;;
-        --purge)   PURGE=true ;;
-        -h|--help) show_help; exit 0 ;;
-        *) log_error "未知参数：$arg"; show_help; exit 1 ;;
+while (($# > 0)); do
+    case "$1" in
+        --target)
+            [[ $# -ge 2 ]] || { log_error "--target 缺少参数"; exit 1; }
+            TARGET="$2"
+            shift 2
+            ;;
+        --purge)
+            PURGE=true
+            shift
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            log_error "未知参数：$1"
+            show_help
+            exit 1
+            ;;
     esac
 done
 
+resolve_target() {
+    if [[ -n "$TARGET" ]]; then
+        return
+    fi
+    if [[ ! -t 0 ]]; then
+        log_error "非交互环境必须通过 --target 指定 claude、codex 或 all。"
+        exit 1
+    fi
+    echo "请选择卸载目标："
+    echo "  1. Claude"
+    echo "  2. Codex"
+    echo "  3. Claude 和 Codex"
+    read -r -p "输入 1、2 或 3: " choice
+    case "$choice" in
+        1) TARGET="claude" ;;
+        2) TARGET="codex" ;;
+        3) TARGET="all" ;;
+        *) log_error "无效选择，请重新执行并输入 1、2 或 3。"; exit 1 ;;
+    esac
+}
+
+validate_target() {
+    case "$TARGET" in
+        claude|codex|all) ;;
+        *) log_error "--target 只能是 claude、codex 或 all。"; exit 1 ;;
+    esac
+}
+
 run_cmd() {
     if [[ "$DRY_RUN" == true ]]; then
-        printf "  [DRY-RUN] %s\n" "$*"
+        printf "  [DRY-RUN]"
+        printf " %q" "$@"
+        printf "\n"
     else
         "$@"
     fi
 }
 
-# 删除单个路径（文件或目录）
 remove_path() {
     local path="$1"
     if [[ -e "$path" ]]; then
         log_info "删除：$path"
-        run_cmd rm -rf "$path"
+        run_cmd rm -rf "$path" || return 1
     fi
 }
 
-# 恢复最新备份：找到 <path>.bak.* 中时间戳最大的那个，重命名为 <path>
-# 返回 0 表示恢复了，1 表示没找到备份
 restore_latest_backup() {
     local target_path="$1"
-    # 仅匹配直接子项的备份：CLAUDE.md.bak.*，不会误匹配 CLAUDE.md.bak.xxxx.bak.*（理论上不存在）
-    local pattern="${target_path}.bak.*"
-    # 按文件名排序（时间戳格式 yyyyMMddHHmmss，字符串排序即为时间顺序）
-    # -d 让 ls 只列参数本身，避免目录级备份被错误地"进入内部"
-    local latest
-    latest=$(ls -1dt $pattern 2>/dev/null | head -n 1 || true)
-    if [[ -n "$latest" ]]; then
-        log_info "恢复备份：$latest -> $target_path"
-        # 若目标位置已存在（首次安装无备份的情况），先删再恢复
-        if [[ -e "$target_path" ]]; then
-            run_cmd rm -rf "$target_path"
-        fi
-        run_cmd mv "$latest" "$target_path"
-        return 0
+    local directory base latest
+    directory="$(dirname "$target_path")"
+    base="$(basename "$target_path")"
+    latest="$(find "$directory" -maxdepth 1 -name "$base.bak.*" -print 2>/dev/null | sort -r | head -n 1 || true)"
+    if [[ -z "$latest" ]]; then
+        return 1
     fi
-    return 1
+    log_info "恢复备份：$latest -> $target_path"
+    if [[ -e "$target_path" ]]; then
+        run_cmd rm -rf "$target_path" || return 1
+    fi
+    run_cmd mv "$latest" "$target_path" || return 1
 }
 
-# 删除所有 .bak.<时间戳> 备份（仅 --purge 模式调用）
-purge_all_backups() {
-    local pattern="$1"
-    local backups
-    # -d 让 ls 只列参数本身：对文件正确，对目录级备份也不会递归进去
-    backups=$(ls -1dt $pattern 2>/dev/null || true)
-    if [[ -n "$backups" ]]; then
-        echo "$backups" | while read -r b; do
-            [[ -n "$b" ]] && log_info "清理备份：$b" && [[ "$DRY_RUN" == false ]] && rm -rf "$b"
-        done
-    fi
+remove_all_backups() {
+    local target_path="$1"
+    local directory base backup
+    directory="$(dirname "$target_path")"
+    base="$(basename "$target_path")"
+    while IFS= read -r backup; do
+        [[ -n "$backup" ]] || continue
+        log_info "清理备份：$backup"
+        run_cmd rm -rf "$backup" || return 1
+    done < <(find "$directory" -maxdepth 1 -name "$base.bak.*" -print 2>/dev/null)
 }
 
-main() {
-    echo "Claude Code 全局配置卸载器"
-    echo "  目标目录：$TARGET_DIR"
-    if [[ "$DRY_RUN" == true ]]; then echo "  模式：干跑"; fi
-    if [[ "$PURGE"  == true ]]; then echo "  模式：完全删除（含所有备份）"; fi
+uninstall_target() {
+    local name="$1"
+    local root entry entry_path rules_path
+    case "$name" in
+        claude) root="$HOME/.claude"; entry="CLAUDE.md" ;;
+        codex) root="$HOME/.codex"; entry="AGENTS.md" ;;
+        *) log_error "未知目标：$name"; return 1 ;;
+    esac
+    entry_path="$root/$entry"
+    rules_path="$root/rules"
+
     echo
-
-    if [[ ! -d "$TARGET_DIR" ]]; then
-        log_warn "目标目录不存在：$TARGET_DIR，无需卸载"
-        exit 0
+    echo "卸载目标：$name"
+    if [[ ! -d "$root" ]]; then
+        log_warn "目标目录不存在：$root，无需卸载。"
+        return 0
     fi
 
     if [[ "$PURGE" == true ]]; then
-        # 完全删除：清掉当前文件 + 所有备份
-        remove_path "$TARGET_DIR/CLAUDE.md"
-        remove_path "$TARGET_DIR/rules"
-        purge_all_backups "$TARGET_DIR/CLAUDE.md.bak.*"
-        purge_all_backups "$TARGET_DIR/rules.bak.*"
-        # rules 目录下是递归备份，统一清理
-        if [[ -d "$TARGET_DIR/rules" ]]; then
-            find "$TARGET_DIR/rules" -name '*.bak.*' -exec rm -rf {} +
-        fi
-        # 若整个 .claude 目录为空，可顺手删除
-        if [[ -z "$(ls -A "$TARGET_DIR" 2>/dev/null)" ]]; then
-            remove_path "$TARGET_DIR"
-        fi
+        remove_path "$entry_path" || return 1
+        remove_path "$rules_path" || return 1
+        remove_all_backups "$entry_path" || return 1
+        remove_all_backups "$rules_path" || return 1
     else
-        # 默认：尝试从最新备份恢复；无备份时（首次安装）直接删除本次内容
-        if ! restore_latest_backup "$TARGET_DIR/CLAUDE.md"; then
-            remove_path "$TARGET_DIR/CLAUDE.md"
+        if ! restore_latest_backup "$entry_path"; then
+            remove_path "$entry_path" || return 1
         fi
-
-        # rules 是目录：先恢复目录级备份（如果有），恢复失败则删除目录（首次安装）
-        if [[ -d "$TARGET_DIR/rules" ]]; then
-            if ! restore_latest_backup "$TARGET_DIR/rules"; then
-                remove_path "$TARGET_DIR/rules"
-            fi
-            # 清理 rules 内部各文件的 .bak.*（install 脚本对每个规则文件都会备份）
-            local inner_backups
-            inner_backups=$(find "$TARGET_DIR/rules" -name '*.bak.*' 2>/dev/null || true)
-            if [[ -n "$inner_backups" ]]; then
-                echo "$inner_backups" | while read -r b; do
-                    [[ -n "$b" ]] && log_info "清理文件级备份：$b" && [[ "$DRY_RUN" == false ]] && rm -rf "$b"
-                done
-            fi
+        if ! restore_latest_backup "$rules_path"; then
+            remove_path "$rules_path" || return 1
         fi
-
-        # 顺带清理目录级的 .bak.*（如果 install 备份过 rules 目录）
-        purge_all_backups "$TARGET_DIR/rules.bak.*"
-        purge_all_backups "$TARGET_DIR/CLAUDE.md.bak.*"
-
-        # 若整个 .claude 目录为空，可顺手删除
-        if [[ -z "$(ls -A "$TARGET_DIR" 2>/dev/null)" ]]; then
-            remove_path "$TARGET_DIR"
-        fi
+        remove_all_backups "$entry_path" || return 1
+        remove_all_backups "$rules_path" || return 1
     fi
 
-    echo
-    log_info "卸载完成"
-    if [[ "$DRY_RUN" == true ]]; then
-        log_warn "本次为干跑模式，未实际修改任何文件"
-    fi
-
-    # 阻塞等待回车：仅在交互式终端且非干跑模式时
-    if [[ "$DRY_RUN" == false ]] && [[ -t 0 ]]; then
-        echo
-        read -r -p "按回车键关闭窗口..." _ || true
+    if [[ "$DRY_RUN" == false ]] && [[ -z "$(ls -A "$root" 2>/dev/null)" ]]; then
+        remove_path "$root" || return 1
     fi
 }
 
-main
+resolve_target
+validate_target
+
+echo "Claude 与 Codex 全局规则卸载器"
+echo "  目标：$TARGET"
+[[ "$PURGE" == true ]] && echo "  模式：完全删除（含备份）"
+[[ "$DRY_RUN" == true ]] && echo "  模式：干跑"
+
+if [[ "$TARGET" == all ]]; then
+    names="claude codex"
+else
+    names="$TARGET"
+fi
+
+failures=""
+for name in $names; do
+    if ! uninstall_target "$name"; then
+        log_error "$name 卸载失败。"
+        failures="$failures $name"
+    fi
+done
+
+echo
+if [[ -n "$failures" ]]; then
+    log_error "卸载未完全成功，失败目标：$failures"
+    exit 1
+fi
+
+log_info "卸载完成。"
+[[ "$DRY_RUN" == true ]] && log_warn "本次为干跑模式，未实际修改文件。"

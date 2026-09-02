@@ -1,164 +1,178 @@
-# 一键卸载 Claude Code 全局配置（Windows PowerShell）
-# 默认行为：从最近一次备份恢复（如果存在），并删除本次安装写入的文件
-# 用法：
-#   .\uninstall.ps1                回滚到上次备份（无备份则删除）
-#   .\uninstall.ps1 -Purge         完全删除所有相关文件（含所有备份）
-#   .\uninstall.ps1 -WhatIf        预览操作，不实际执行
-#   .\uninstall.ps1 -Help          查看帮助
+# Claude 与 Codex 全局规则卸载器（Windows PowerShell）
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [switch]$Purge
+    [ValidateSet('Claude', 'Codex', 'All')]
+    [string]$Target,
+    [switch]$Purge,
+    [switch]$Help
 )
 
 $ErrorActionPreference = 'Stop'
 
-$TargetDir = Join-Path $env:USERPROFILE '.claude'
-
-# 颜色（仅当输出到终端时启用）
-function Write-Info  { param($m) if ($Host.UI.SupportsVirtualTerminal) { Write-Host "[OK] $m" -ForegroundColor Green } else { Write-Host "[OK] $m" } }
-function Write-Warn2 { param($m) if ($Host.UI.SupportsVirtualTerminal) { Write-Host "[WARN] $m" -ForegroundColor Yellow } else { Write-Host "[WARN] $m" } }
-function Write-Err2  { param($m) if ($Host.UI.SupportsVirtualTerminal) { Write-Host "[ERROR] $m" -ForegroundColor Red } else { Write-Host "[ERROR] $m" } }
+function Write-Info { param([string]$Message) Write-Host "[OK] $Message" -ForegroundColor Green }
+function Write-Warn2 { param([string]$Message) Write-Host "[WARN] $Message" -ForegroundColor Yellow }
+function Write-Err2 { param([string]$Message) Write-Host "[ERROR] $Message" -ForegroundColor Red }
 
 function Show-Help {
     @'
-用法：.\uninstall.ps1 [选项]
+用法：.\uninstall.ps1 [-Target Claude|Codex|All] [-Purge] [-WhatIf] [-Help]
 
 选项：
-  -Purge      完全删除所有相关文件，包括所有 .bak.<时间戳> 备份
-  -WhatIf     预览将要执行的操作，不实际修改文件
-  -Help       显示本帮助
+  -Target    卸载目标。未指定时在交互式终端中选择。
+  -Purge     删除本包入口、rules 和对应备份，不恢复旧配置。
+  -WhatIf    预览操作，不修改文件。
+  -Help      显示本帮助。
 
-默认行为：
-  - 找到最近一次备份，恢复到 %USERPROFILE%\.claude\
-  - 如果无备份（首次安装），直接删除目标文件/目录
-  - 删除本次安装写入的内容：CLAUDE.md、rules/ 及其备份
+默认行为恢复最近备份；没有备份时只删除本包安装的入口与 rules。
+非交互环境必须指定 -Target。
 '@
+}
+
+function Resolve-Target {
+    param([string]$SelectedTarget)
+    if ($SelectedTarget) { return $SelectedTarget }
+    if ([Console]::IsInputRedirected) {
+        throw '非交互环境必须通过 -Target 指定 Claude、Codex 或 All。'
+    }
+    Write-Host '请选择卸载目标：'
+    Write-Host '  1. Claude'
+    Write-Host '  2. Codex'
+    Write-Host '  3. Claude 和 Codex'
+    $choice = Read-Host '输入 1、2 或 3'
+    switch ($choice) {
+        '1' { return 'Claude' }
+        '2' { return 'Codex' }
+        '3' { return 'All' }
+        default { throw '无效选择，请重新执行并输入 1、2 或 3。' }
+    }
+}
+
+function Get-TargetNames {
+    param([string]$SelectedTarget)
+    if ($SelectedTarget -eq 'All') { return @('Claude', 'Codex') }
+    return @($SelectedTarget)
+}
+
+function Get-TargetSpec {
+    param([string]$Name)
+    switch ($Name) {
+        'Claude' { return [pscustomobject]@{ Name = 'Claude'; Root = Join-Path $env:USERPROFILE '.claude'; Entry = 'CLAUDE.md' } }
+        'Codex' { return [pscustomobject]@{ Name = 'Codex'; Root = Join-Path $env:USERPROFILE '.codex'; Entry = 'AGENTS.md' } }
+        default { throw "未知目标：$Name" }
+    }
 }
 
 function Remove-Path {
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param($Path)
-    if (Test-Path $Path) {
+    param([string]$Path)
+    if (Test-Path -LiteralPath $Path) {
         Write-Info "删除：$Path"
-        if ($PSCmdlet.ShouldProcess($Path, "删除")) {
-            Remove-Item -Path $Path -Recurse -Force
+        if ($PSCmdlet.ShouldProcess($Path, '删除')) {
+            Remove-Item -LiteralPath $Path -Recurse -Force
         }
     }
 }
 
-# 恢复最新备份：找到 <path>.bak.* 中时间戳最大的那个，重命名为 <path>
-# 返回 $true 表示恢复了，$false 表示没找到备份
 function Restore-LatestBackup {
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param($TargetPath)
-    $pattern = "$TargetPath.bak.*"
-    if (-not (Test-Path $pattern)) { return $false }
-    $latest = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
+    param([string]$TargetPath)
+
+    $latest = Get-ChildItem -Path "$TargetPath.bak.*" -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending |
         Select-Object -First 1
-    if ($null -ne $latest) {
-        Write-Info "恢复备份：$($latest.FullName) -> $TargetPath"
-        if (Test-Path $TargetPath) {
-            if ($PSCmdlet.ShouldProcess($TargetPath, "删除现有")) {
-                Remove-Item -Path $TargetPath -Recurse -Force
-            }
+    if ($null -eq $latest) { return $false }
+
+    Write-Info "恢复备份：$($latest.FullName) -> $TargetPath"
+    if ($PSCmdlet.ShouldProcess($TargetPath, '删除现有内容并恢复备份')) {
+        if (Test-Path -LiteralPath $TargetPath) {
+            Remove-Item -LiteralPath $TargetPath -Recurse -Force
         }
-        if ($PSCmdlet.ShouldProcess($latest.FullName, "重命名为 $TargetPath")) {
-            Rename-Item -Path $latest.FullName -NewName (Split-Path -Leaf $TargetPath) -Force
-        }
-        return $true
+        Rename-Item -LiteralPath $latest.FullName -NewName (Split-Path -Leaf $TargetPath) -Force
     }
-    return $false
+    return $true
 }
 
-# 删除所有 .bak.<时间戳> 备份（仅 -Purge 模式调用）
 function Remove-AllBackups {
     [CmdletBinding(SupportsShouldProcess = $true)]
-    param($Pattern)
-    if (Test-Path $Pattern) {
-        Get-ChildItem -Path $Pattern -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-Info "清理备份：$($_.FullName)"
-            if ($PSCmdlet.ShouldProcess($_.FullName, "删除")) {
-                Remove-Item -Path $_.FullName -Recurse -Force
-            }
+    param([string]$TargetPath)
+    Get-ChildItem -Path "$TargetPath.bak.*" -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Info "清理备份：$($_.FullName)"
+        if ($PSCmdlet.ShouldProcess($_.FullName, '删除备份')) {
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force
         }
     }
 }
 
-# 主流程
-Write-Host "Claude Code 全局配置卸载器"
-Write-Host "  目标目录：$TargetDir"
-if ($WhatIfPreference) { Write-Host "  模式：干跑（-WhatIf）" }
-if ($Purge) { Write-Host "  模式：完全删除（含所有备份）" }
-Write-Host
+function Uninstall-Target {
+    param([string]$Name)
+    $spec = Get-TargetSpec -Name $Name
+    $entryPath = Join-Path $spec.Root $spec.Entry
+    $rulesPath = Join-Path $spec.Root 'rules'
 
-if (-not (Test-Path $TargetDir)) {
-    Write-Warn2 "目标目录不存在：$TargetDir，无需卸载"
+    Write-Host
+    Write-Host "卸载目标：$($spec.Name)"
+    if (-not (Test-Path -LiteralPath $spec.Root -PathType Container)) {
+        Write-Warn2 "目标目录不存在：$($spec.Root)，无需卸载。"
+        return
+    }
+
+    if ($Purge) {
+        Remove-Path -Path $entryPath
+        Remove-Path -Path $rulesPath
+        Remove-AllBackups -TargetPath $entryPath
+        Remove-AllBackups -TargetPath $rulesPath
+    }
+    else {
+        if (-not (Restore-LatestBackup -TargetPath $entryPath)) {
+            Remove-Path -Path $entryPath
+        }
+        if (-not (Restore-LatestBackup -TargetPath $rulesPath)) {
+            Remove-Path -Path $rulesPath
+        }
+        Remove-AllBackups -TargetPath $entryPath
+        Remove-AllBackups -TargetPath $rulesPath
+    }
+
+    if ((Get-ChildItem -LiteralPath $spec.Root -Force -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) {
+        Remove-Path -Path $spec.Root
+    }
+}
+
+if ($Help) {
+    Show-Help
     exit 0
 }
 
-if ($Purge) {
-    # 完全删除：清掉当前文件 + 所有备份
-    Remove-Path "$TargetDir\CLAUDE.md"
-    Remove-Path "$TargetDir\rules"
-    Remove-AllBackups "$TargetDir\CLAUDE.md.bak.*"
-    Remove-AllBackups "$TargetDir\rules.bak.*"
-    # rules 目录下递归清理
-    if (Test-Path "$TargetDir\rules") {
-        Get-ChildItem -Path "$TargetDir\rules" -Filter '*.bak.*' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($PSCmdlet.ShouldProcess($_.FullName, "删除")) {
-                Remove-Item -Path $_.FullName -Recurse -Force
-            }
-        }
-    }
-    # 若整个 .claude 目录为空，可顺手删除
-    if ((Get-ChildItem -Path $TargetDir -Force -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) {
-        Remove-Path $TargetDir
-    }
+try {
+    $resolvedTarget = Resolve-Target -SelectedTarget $Target
+} catch {
+    Write-Err2 $_.Exception.Message
+    exit 1
 }
-else {
-    # 默认：尝试从最新备份恢复；无备份时（首次安装）直接删除本次内容
-    if (-not (Restore-LatestBackup "$TargetDir\CLAUDE.md")) {
-        Remove-Path "$TargetDir\CLAUDE.md"
-    }
 
-    # rules 是目录：恢复失败则删除目录（首次安装），恢复成功则保留
-    if (Test-Path "$TargetDir\rules") {
-        if (-not (Restore-LatestBackup "$TargetDir\rules")) {
-            Remove-Path "$TargetDir\rules"
-        }
-        # 清理 rules 内部各文件的 .bak.*
-        Get-ChildItem -Path "$TargetDir\rules" -Filter '*.bak.*' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-Info "清理文件级备份：$($_.FullName)"
-            if ($PSCmdlet.ShouldProcess($_.FullName, "删除")) {
-                Remove-Item -Path $_.FullName -Recurse -Force
-            }
-        }
-    }
+Write-Host 'Claude 与 Codex 全局规则卸载器'
+Write-Host "  目标：$resolvedTarget"
+if ($Purge) { Write-Host '  模式：完全删除（含备份）' }
+if ($WhatIfPreference) { Write-Host '  模式：干跑（-WhatIf）' }
 
-    # 顺带清理目录级的 .bak.*
-    Remove-AllBackups "$TargetDir\rules.bak.*"
-    Remove-AllBackups "$TargetDir\CLAUDE.md.bak.*"
-
-    # 若整个 .claude 目录为空，可顺手删除
-    if ((Get-ChildItem -Path $TargetDir -Force -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) {
-        Remove-Path $TargetDir
+$failures = @()
+foreach ($name in Get-TargetNames -SelectedTarget $resolvedTarget) {
+    try {
+        Uninstall-Target -Name $name
+    } catch {
+        Write-Err2 "$name 卸载失败：$($_.Exception.Message)"
+        $failures += $name
     }
 }
 
 Write-Host
-Write-Info "卸载完成"
-if ($WhatIfPreference) {
-    Write-Warn2 "本次为干跑模式（-WhatIf），未实际修改任何文件"
+if ($failures.Count -gt 0) {
+    Write-Err2 "卸载未完全成功，失败目标：$($failures -join '、')"
+    exit 1
 }
 
-# 阻塞等待回车：仅在交互式终端且非 -WhatIf 时
-if (-not $WhatIfPreference -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
-    Write-Host
-    try {
-        [void][Console]::In.ReadLine()
-    } catch {
-        # Ctrl+C 等异常吞掉即可
-    }
+Write-Info '卸载完成。'
+if ($WhatIfPreference) {
+    Write-Warn2 '本次为干跑模式，未实际修改文件。'
 }
