@@ -38,7 +38,8 @@
 
 ## 注释与提交
 
-- 编写或修改 C# 注释前，读取 ~/.claude/rules/csharp-comment-standards.md。
+- 编写或修改 C# 代码前，读取 ~/.claude/rules/csharp-comment-standards.md。
+- 新增或修改 C# 类型及成员时，必须添加或同步更新中文 XML 文档注释，覆盖方法、属性等所有适用声明，不因访问级别、实现简单或属于自动属性而省略；具体范围、标签要求及例外遵循上述注释规范。
 - 准备 Git 提交信息前，读取 ~/.claude/rules/git-commit-standards.md。
 - 注释和提交信息不包含版本号、装饰符号、提交元信息或 AI 协作痕迹。
 - 代码注释文本末尾不添加中文或英文标点、分隔符或装饰字符；XML 标签和代码语法除外。
